@@ -539,23 +539,44 @@ $("#btnSerialCam").addEventListener("click", ()=>{ closeSer=startQrScan($("#serV
 $("#serClose").addEventListener("click", ()=>closeSer&&closeSer());
 
 /* ===== OCR (Tesseract.js, 端末内) ===== */
-let ocrStream=null, ocrWorker=null;
+let ocrStream=null, ocrWorker=null, ocrBusy=false;
+async function stopOcrStream(){
+  const v=$("#ocrVideo");
+  try{ v.pause(); }catch(e){}
+  if(ocrStream){ ocrStream.getTracks().forEach(t=>t.stop()); ocrStream=null; }
+  try{ v.srcObject=null; }catch(e){}
+}
 $("#btnOcr").addEventListener("click", async ()=>{
-  $("#ovOcr").classList.add("show");
+  if(ocrBusy) return;
+  ocrBusy=true;
+  // 前回のストリームを必ず解放してから開始
+  await stopOcrStream();
+  // 表示状態を完全リセット
+  const v=$("#ocrVideo"), cv=$("#ocrPrev");
+  v.style.display=""; cv.style.display="none";
   $("#ocrCands").innerHTML=""; $("#ocrRetry").style.display="none"; $("#ocrShoot").style.display="";
-  $("#ocrVideo").style.display=""; $("#ocrPrev").style.display="none";
   $("#ocrHint").textContent="ラベルの英数字を枠に合わせて撮影";
+  $("#ovOcr").classList.add("show");
   try{
-    ocrStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}}});
-    $("#ocrVideo").srcObject=ocrStream; $("#ocrVideo").play();
-  }catch(e){ toast("カメラを起動できません","err"); closeOcr(); }
+    ocrStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}},audio:false});
+    v.srcObject=ocrStream;
+    v.setAttribute("playsinline","");
+    await v.play();
+  }catch(e){
+    $("#ocrHint").textContent="カメラを起動できません。一度閉じて再度お試しください";
+    toast("カメラ起動に失敗","err");
+  }
+  ocrBusy=false;
 });
-function closeOcr(){ if(ocrStream){ocrStream.getTracks().forEach(t=>t.stop());ocrStream=null;} $("#ovOcr").classList.remove("show"); }
+function closeOcr(){ stopOcrStream(); $("#ovOcr").classList.remove("show"); }
 $("#ocrClose").addEventListener("click", closeOcr);
 $("#ocrRetry").addEventListener("click", ()=>{ $("#btnOcr").click(); });
 
 $("#ocrShoot").addEventListener("click", async ()=>{
-  const v=$("#ocrVideo"); if(!v.videoWidth){return;}
+  if(ocrBusy) return;
+  const v=$("#ocrVideo");
+  if(!v.videoWidth){ $("#ocrHint").textContent="カメラ準備中です。少し待って再度押してください"; return; }
+  ocrBusy=true;
   const cv=$("#ocrPrev"), ctx=cv.getContext("2d");
   // 中央の横長帯（reticle相当）だけ切り出して精度UP
   const W=v.videoWidth,H=v.videoHeight;
@@ -570,6 +591,8 @@ $("#ocrShoot").addEventListener("click", async ()=>{
   $("#ocrVideo").style.display="none"; cv.style.display="";
   $("#ocrHint").textContent="読取中…";
   $("#ocrShoot").style.display="none";
+  // 静止画を撮ったらカメラは解放（リソース枯渇・再起動失敗の防止）
+  await stopOcrStream();
   try{
     if(!ocrWorker){ ocrWorker=await Tesseract.createWorker("eng"); 
       await ocrWorker.setParameters({tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-"}); }
@@ -579,6 +602,7 @@ $("#ocrShoot").addEventListener("click", async ()=>{
     showOcrCands(cands, data.text, type);
   }catch(e){ $("#ocrHint").textContent="読取に失敗しました"; }
   $("#ocrRetry").style.display="";
+  ocrBusy=false;
 });
 /* OCR誤認識の文字補正マップ */
 const TO_DIGIT={O:"0",Q:"0",D:"0",I:"1",L:"1",T:"1",Z:"2",E:"3",A:"4",S:"5",G:"6",B:"8","|":"1"};
