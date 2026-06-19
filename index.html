@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#ffffff">
+<title>機器棚卸し</title>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
+<style>
+  :root{
+    --bg:#ffffff; --panel:#f5f8fa; --panel2:#eef3f6;
+    --ink:#15323f; --muted:#5b7280; --line:#d9e2e8;
+    --teal:#159e90; --teal-d:#0f7d72;
+    --amber:#c97a06; --red:#d23b30; --green:#1f9d57;
+    --ok:#1f9d6b;
+    --radius:14px;
+    font-size:16px;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Sans","Noto Sans JP",sans-serif;
+    display:flex; flex-direction:column; min-height:100vh;
+    overscroll-behavior:none;
+  }
+  header{
+    background:linear-gradient(180deg,#ffffff,#f3f7f9);
+    padding:14px 16px 12px; border-bottom:1px solid var(--line);
+    position:sticky; top:0; z-index:30;
+  }
+  .hrow{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .title{font-size:1.05rem;font-weight:700;letter-spacing:.02em}
+  .title small{display:block;font-size:.72rem;color:var(--muted);font-weight:500;letter-spacing:.06em;margin-top:2px}
+  .badge{font-size:.7rem;padding:4px 9px;border-radius:999px;background:var(--panel2);color:var(--muted);border:1px solid var(--line)}
+  .badge.on{color:#ffffff;background:var(--teal);border-color:var(--teal)}
+
+  main{flex:1;padding:14px 14px 90px;max-width:560px;width:100%;margin:0 auto}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:14px}
+  .card h2{margin:0 0 10px;font-size:.82rem;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;font-weight:700}
+
+  label{display:block;font-size:.78rem;color:var(--muted);margin:0 0 5px}
+  select,input[type=text]{
+    width:100%;padding:13px 12px;font-size:1rem;color:var(--ink);
+    background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+    appearance:none;outline:none;
+  }
+  select:focus,input:focus{border-color:var(--teal)}
+  .field{margin-bottom:12px}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+  .step{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .step .n{width:22px;height:22px;border-radius:50%;background:var(--panel2);border:1px solid var(--line);
+    display:flex;align-items:center;justify-content:center;font-size:.75rem;color:var(--muted);font-weight:700;flex:0 0 auto}
+  .step.done .n{background:var(--green);border-color:var(--green);color:#ffffff}
+  .step .lbl{font-size:.82rem;color:var(--muted)}
+  .step.done .lbl{color:var(--ink)}
+
+  .scanbox{display:flex;gap:8px;align-items:stretch}
+  .scanbox input{flex:1}
+  button{font-family:inherit;font-size:.95rem;font-weight:600;border:none;border-radius:10px;padding:13px 14px;cursor:pointer}
+  .btn-cam{background:var(--panel2);color:var(--teal);border:1px solid var(--teal-d);flex:0 0 auto;display:flex;align-items:center;gap:6px}
+  .btn-ocr{background:var(--panel2);color:var(--amber);border:1px solid #7a5a12;flex:0 0 auto}
+  .btn-primary{width:100%;background:var(--teal);color:#ffffff;font-weight:800;font-size:1.05rem;padding:16px;letter-spacing:.04em}
+  .btn-primary:disabled{opacity:.4;background:var(--panel2);color:var(--muted)}
+  .btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
+  .icon{width:18px;height:18px;display:inline-block;vertical-align:-3px}
+
+  .matched{font-size:.8rem;margin-top:6px;min-height:1.1em}
+  .matched.ok{color:var(--green)} .matched.bad{color:var(--red)} .matched.warn{color:var(--amber)}
+
+  /* camera overlay */
+  .overlay{position:fixed;inset:0;background:#000;z-index:60;display:none;flex-direction:column}
+  .overlay.show{display:flex}
+  .overlay video, .overlay canvas#ocrPrev{width:100%;height:100%;object-fit:cover;position:absolute;inset:0}
+  .ovbar{position:relative;z-index:2;padding:14px 16px;background:linear-gradient(180deg,rgba(0,0,0,.7),transparent);color:#fff;display:flex;justify-content:space-between;align-items:center}
+  .ovbar .t{font-weight:700}
+  .reticle{position:absolute;z-index:2;left:50%;top:46%;transform:translate(-50%,-50%);
+    width:74vw;max-width:340px;aspect-ratio:1.6/1;border:2px solid rgba(46,196,182,.9);border-radius:12px;
+    box-shadow:0 0 0 100vmax rgba(0,0,0,.45)}
+  .reticle.ocr{aspect-ratio:3.2/1}
+  .ovfoot{position:absolute;bottom:0;left:0;right:0;z-index:2;padding:18px 16px 30px;
+    background:linear-gradient(0deg,rgba(0,0,0,.75),transparent);display:flex;flex-direction:column;gap:10px}
+  .ovhint{color:#cfe6ee;font-size:.85rem;text-align:center}
+  .ocr-cands{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+  .ocr-cand{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:999px;padding:8px 14px;font-size:1rem;font-weight:700}
+  .ovbtns{display:flex;gap:10px}
+  .ovbtns button{flex:1}
+
+  /* toast */
+  #toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%) translateY(20px);
+    background:var(--ok);color:#fff;padding:12px 18px;border-radius:999px;font-weight:700;font-size:.9rem;
+    opacity:0;transition:.25s;z-index:80;pointer-events:none;box-shadow:0 6px 20px rgba(0,0,0,.4);max-width:90vw;text-align:center}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  #toast.err{background:var(--red)} #toast.warn{background:var(--amber);color:#3a2a00}
+
+  /* list */
+  .listwrap{max-height:46vh;overflow:auto}
+  table{width:100%;border-collapse:collapse;font-size:.82rem}
+  th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-size:.72rem;position:sticky;top:0;background:var(--panel)}
+  td .pill{font-size:.68rem;padding:2px 7px;border-radius:999px;background:var(--panel2);color:var(--muted)}
+  .empty{color:var(--muted);text-align:center;padding:24px;font-size:.85rem}
+
+  /* bottom tabs */
+  .tabs{position:fixed;bottom:0;left:0;right:0;z-index:40;display:flex;background:#ffffff;border-top:1px solid var(--line)}
+  .tab{flex:1;padding:11px 0 14px;text-align:center;color:var(--muted);font-size:.72rem;font-weight:600;background:none;border:none;border-radius:0}
+  .tab.active{color:var(--teal)}
+  .tab .ti{display:block;font-size:1.2rem;line-height:1.4}
+  .view{display:none} .view.active{display:block}
+
+  .hint{font-size:.74rem;color:var(--muted);line-height:1.5;margin-top:8px}
+  .kv{display:flex;justify-content:space-between;font-size:.85rem;padding:6px 0;border-bottom:1px dashed var(--line)}
+  .kv b{color:var(--ink)}
+  .stat{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center}
+  .stat div{background:var(--panel2);border-radius:10px;padding:10px 4px}
+  .stat .num{font-size:1.4rem;font-weight:800;color:var(--teal)}
+  .stat .lab{font-size:.68rem;color:var(--muted)}
+  .progress{height:8px;background:var(--panel2);border-radius:999px;overflow:hidden;margin:8px 0 4px}
+  .progress i{display:block;height:100%;background:var(--teal);width:0}
+  details{background:var(--panel2);border-radius:10px;padding:0 12px;margin-top:8px}
+  summary{padding:11px 0;cursor:pointer;font-size:.85rem;color:var(--muted)}
+  details p{font-size:.78rem;color:var(--muted);line-height:1.6;margin:0 0 12px}
+  .warnbox{background:rgba(230,88,77,.12);border:1px solid #6e2e29;border-radius:10px;padding:10px 12px;font-size:.78rem;color:#f0b3ae;margin-top:8px;display:none}
+  .warnbox.show{display:block}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hrow">
+    <div class="title">機器棚卸し<small>QR × シリアルNo 紐づけ</small></div>
+    <span class="badge" id="syncBadge">未接続</span>
+  </div>
+</header>
+
+<main>
+  <!-- ===== 棚卸しビュー ===== -->
+  <section class="view active" id="view-scan">
+    <div class="card">
+      <h2>① 機器を読み取る</h2>
+      <div class="field">
+        <label>種別</label>
+        <select id="selType"></select>
+      </div>
+      <div class="field">
+        <label>機器番号（QR）</label>
+        <div class="scanbox">
+          <input type="text" id="inDevice" inputmode="text" placeholder="QRスキャン / 手入力" autocomplete="off">
+          <button class="btn-cam" id="btnQrCam" type="button">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9V5a2 2 0 0 1 2-2h4M15 3h4a2 2 0 0 1 2 2v4M21 15v4a2 2 0 0 1-2 2h-4M9 21H5a2 2 0 0 1-2-2v-4"/></svg>
+            カメラ
+          </button>
+        </div>
+        <div class="matched" id="devMatch"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>② シリアルNoを読み取る</h2>
+      <div class="field">
+        <label>シリアルNo</label>
+        <div class="scanbox">
+          <input type="text" id="inSerial" inputmode="text" placeholder="HIDスキャナ / 手入力" autocomplete="off">
+          <button class="btn-cam" id="btnSerialCam" type="button">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9V5a2 2 0 0 1 2-2h4M15 3h4a2 2 0 0 1 2 2v4M21 15v4a2 2 0 0 1-2 2h-4M9 21H5a2 2 0 0 1-2-2v-4"/></svg>
+          </button>
+          <button class="btn-ocr" id="btnOcr" type="button">OCR</button>
+        </div>
+        <div class="matched" id="serMatch"></div>
+      </div>
+      <div class="warnbox" id="dupWarn"></div>
+    </div>
+
+    <button class="btn-primary" id="btnSave" disabled>保存して次へ</button>
+    <div class="hint">
+      Bluetoothスキャナは <b>HIDキーボードモード</b> 想定。シリアル欄をタップしてからスキャンすると読取値が直接入ります。
+      バーコードが無い機器（モバイル等）は <b>OCR</b> ボタンで型番ラベルを撮影してください。
+    </div>
+  </section>
+
+  <!-- ===== 一覧ビュー ===== -->
+  <section class="view" id="view-list">
+    <div class="card">
+      <h2>進捗</h2>
+      <div class="stat">
+        <div><div class="num" id="stDone">0</div><div class="lab">登録済</div></div>
+        <div><div class="num" id="stTotal">0</div><div class="lab">総機器数</div></div>
+        <div><div class="num" id="stPct">0%</div><div class="lab">完了率</div></div>
+      </div>
+      <div class="progress"><i id="prog"></i></div>
+      <button class="btn-ghost" id="btnReload" style="width:100%;margin-top:10px">サーバーから再読み込み</button>
+    </div>
+    <div class="card">
+      <h2>登録済み一覧</h2>
+      <div class="field"><input type="text" id="inFilter" placeholder="絞り込み（機器番号 / シリアル）"></div>
+      <div class="listwrap">
+        <table>
+          <thead><tr><th>種別</th><th>機器番号</th><th>シリアルNo</th><th>方法</th></tr></thead>
+          <tbody id="listBody"></tbody>
+        </table>
+        <div class="empty" id="listEmpty">まだ登録がありません</div>
+      </div>
+      <button class="btn-ghost" id="btnCsv" style="width:100%;margin-top:10px">CSVダウンロード</button>
+    </div>
+  </section>
+
+  <!-- ===== 設定ビュー ===== -->
+  <section class="view" id="view-cfg">
+    <div class="card">
+      <h2>接続設定</h2>
+      <div class="field">
+        <label>GAS ウェブアプリ URL</label>
+        <input type="text" id="inGas" placeholder="https://script.google.com/macros/s/.../exec">
+      </div>
+      <div class="field">
+        <label>担当者名</label>
+        <input type="text" id="inWorker" placeholder="例: 林">
+      </div>
+      <div class="field">
+        <label>保存時の動作</label>
+        <select id="selOverwrite">
+          <option value="true">同じ機器番号は上書き（再棚卸し向き）</option>
+          <option value="false">常に追記（履歴を残す）</option>
+        </select>
+      </div>
+      <button class="btn-ghost" id="btnTest" style="width:100%">接続テスト</button>
+      <div class="matched" id="cfgMsg" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <h2>メモ・使い方</h2>
+      <details><summary>Bluetoothスキャナの設定</summary>
+        <p>スキャナを <b>HIDキーボードモード</b> でペアリングしてください。多くの機種は「HID」設定バーコードを読ませると切り替わります。読取後に自動でEnterを送る設定にしておくと、保存ボタンが自動で有効化されます。</p></details>
+      <details><summary>OCRがうまく読めないとき</summary>
+        <p>ラベルが枠いっぱいに、まっすぐ写るようにしてください。明るい場所で、英数字部分だけを枠に収めると精度が上がります。候補が複数出たら正しいものをタップ、無ければ手入力に切り替えられます。</p></details>
+      <details><summary>データの保存先</summary>
+        <p>Googleスプレッドシートの「棚卸し」シートに記録されます。設定はこの端末のブラウザに保存され、次回も引き継がれます。</p></details>
+    </div>
+  </section>
+</main>
+
+<!-- カメラオーバーレイ（QR） -->
+<div class="overlay" id="ovQr">
+  <div class="ovbar"><span class="t">QRコードをスキャン</span><button class="btn-ghost" id="qrClose">閉じる</button></div>
+  <video id="qrVideo" playsinline muted></video>
+  <div class="reticle"></div>
+  <div class="ovfoot"><div class="ovhint">枠内にQRコードを合わせてください</div></div>
+</div>
+
+<!-- カメラオーバーレイ（シリアルバーコード = QR/各種2D） -->
+<div class="overlay" id="ovSer">
+  <div class="ovbar"><span class="t">バーコードをスキャン</span><button class="btn-ghost" id="serClose">閉じる</button></div>
+  <video id="serVideo" playsinline muted></video>
+  <div class="reticle ocr"></div>
+  <div class="ovfoot"><div class="ovhint">QR/2Dバーコードを枠に合わせてください</div></div>
+</div>
+
+<!-- OCRオーバーレイ -->
+<div class="overlay" id="ovOcr">
+  <div class="ovbar"><span class="t">シリアルをOCR撮影</span><button class="btn-ghost" id="ocrClose">閉じる</button></div>
+  <video id="ocrVideo" playsinline muted></video>
+  <canvas id="ocrPrev" style="display:none"></canvas>
+  <div class="reticle ocr"></div>
+  <div class="ovfoot">
+    <div class="ovhint" id="ocrHint">ラベルの英数字を枠に合わせて撮影</div>
+    <div class="ocr-cands" id="ocrCands"></div>
+    <div class="ovbtns">
+      <button class="btn-primary" id="ocrShoot" style="background:var(--amber);color:#3a2a00">撮影して読取</button>
+      <button class="btn-ghost" id="ocrRetry" style="display:none">撮り直す</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<!-- bottom tabs -->
+<nav class="tabs">
+  <button class="tab active" data-view="scan"><span class="ti">▣</span>棚卸し</button>
+  <button class="tab" data-view="list"><span class="ti">≣</span>一覧</button>
+  <button class="tab" data-view="cfg"><span class="ti">⚙</span>設定</button>
+</nav>
+
+<script>
+/* ===== 機器番号マスタ（QRに入っている文字列＝機器番号） ===== */
+const MASTER = {
+  "無線":      Array.from({length:60},(_,i)=>String(i+1)),
+  "モバイル":  Array.from({length:50},(_,i)=>"M"+(i+1)),
+  "WindowsPC": Array.from({length:30},(_,i)=>"WindowsPC"+(i+1)),
+  "UbuntuPC":  Array.from({length:100},(_,i)=>"UbuntuPC"+(i+1)),
+  "ZEBRA":     [...Array.from({length:60},(_,i)=>"ZABRA "+(i+1)),
+                ...Array.from({length:60},(_,i)=>"ZABRA PC "+(i+1))]
+};
+const OCR_DEFAULT = new Set(["モバイル"]); // バーコード無し→OCR主体
+const TYPES = Object.keys(MASTER);
+const TOTAL = Object.values(MASTER).reduce((a,b)=>a+b.length,0);
+
+/* どの種別の番号か逆引き */
+const DEVICE_INDEX = {};
+for(const t of TYPES){ for(const id of MASTER[t]){ DEVICE_INDEX[norm(id)] = {type:t, id}; } }
+function norm(s){ return String(s||"").trim().replace(/\s+/g," ").toUpperCase(); }
+
+/* ===== state / config ===== */
+const cfg = loadCfg();
+let records = [];           // サーバー＋ローカルの登録一覧
+const pendingKey = "stocktake_pending";
+let pending = JSON.parse(localStorage.getItem(pendingKey) || "[]"); // 未送信キュー
+
+const $ = s=>document.querySelector(s);
+const $$ = s=>document.querySelectorAll(s);
+
+/* init UI */
+(function init(){
+  const sel = $("#selType");
+  TYPES.forEach(t=>{ const o=document.createElement("option");o.value=t;o.textContent=`${t}（${MASTER[t].length}）`;sel.appendChild(o); });
+  $("#inGas").value = cfg.gas || "";
+  $("#inWorker").value = cfg.worker || "";
+  $("#selOverwrite").value = cfg.overwrite ? "true":"false";
+  $("#stTotal").textContent = TOTAL;
+  updateSyncBadge();
+  if(cfg.gas) reload();
+  else renderList();
+})();
+
+/* ===== tabs ===== */
+$$(".tab").forEach(b=>b.addEventListener("click",()=>{
+  $$(".tab").forEach(x=>x.classList.remove("active"));
+  b.classList.add("active");
+  const v=b.dataset.view;
+  $$(".view").forEach(x=>x.classList.remove("active"));
+  $("#view-"+v).classList.add("active");
+  if(v==="list") renderList();
+}));
+
+/* ===== type change: OCR優先の機器はヒント変更 ===== */
+$("#selType").addEventListener("change",()=>{
+  const t=$("#selType").value;
+  $("#btnOcr").style.outline = OCR_DEFAULT.has(t) ? "2px solid var(--amber)" : "none";
+});
+
+/* ===== device input matching ===== */
+$("#inDevice").addEventListener("input", onDeviceInput);
+function onDeviceInput(){
+  const raw = $("#inDevice").value;
+  const m = DEVICE_INDEX[norm(raw)];
+  const el = $("#devMatch");
+  if(!raw.trim()){ el.textContent=""; el.className="matched"; }
+  else if(m){
+    el.textContent = `✓ ${m.type} / ${m.id}`; el.className="matched ok";
+    if($("#selType").value!==m.type){ $("#selType").value=m.type; }
+  } else {
+    el.textContent = "⚠ マスタに無い番号（このまま保存も可）"; el.className="matched warn";
+  }
+  checkDup(); refreshSave();
+}
+
+/* ===== serial input ===== */
+$("#inSerial").addEventListener("input", ()=>{
+  const v=$("#inSerial").value.trim();
+  const el=$("#serMatch");
+  el.textContent = v ? `入力: ${v}` : "";
+  el.className = "matched ok";
+  checkDup(); refreshSave();
+});
+/* HIDスキャナのEnter→保存可なら次フィールド/保存 */
+$("#inSerial").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); if(!$("#btnSave").disabled) $("#btnSave").click(); }});
+$("#inDevice").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("#inSerial").focus(); }});
+
+function refreshSave(){
+  const ok = $("#inDevice").value.trim() && $("#inSerial").value.trim();
+  $("#btnSave").disabled = !ok;
+}
+function checkDup(){
+  const id = norm($("#inDevice").value);
+  const w=$("#dupWarn");
+  const ex = records.find(r=>norm(r.deviceId)===id && id);
+  if(ex){
+    w.classList.add("show");
+    w.innerHTML = `この機器は登録済み（シリアル: <b>${esc(ex.serial)}</b>）。`+
+      (cfg.overwrite?"保存すると上書きされます。":"追記モードのため新しい行が追加されます。");
+  } else w.classList.remove("show");
+}
+
+/* ===== save ===== */
+$("#btnSave").addEventListener("click", async ()=>{
+  const t=$("#selType").value;
+  const id=$("#inDevice").value.trim();
+  const serial=$("#inSerial").value.trim();
+  const method = lastSerialMethod || "手入力";
+  const rec={ type:t, deviceId:id, serial, method, worker:cfg.worker||"", note:"", overwrite:cfg.overwrite, ts:new Date().toISOString() };
+  // 楽観的更新
+  upsertLocal(rec);
+  resetForm();
+  toast("保存しました："+id);
+  send(rec);
+});
+
+function resetForm(){
+  $("#inDevice").value=""; $("#inSerial").value="";
+  $("#devMatch").textContent=""; $("#serMatch").textContent="";
+  $("#dupWarn").classList.remove("show");
+  lastSerialMethod=null;
+  $("#btnSave").disabled=true;
+  $("#inDevice").focus();
+}
+
+/* ===== GAS送信（キュー付き） ===== */
+async function send(rec){
+  if(!cfg.gas){ queue(rec); toast("URL未設定。端末に保存しました",  "warn"); return; }
+  try{
+    await fetch(cfg.gas,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(rec)});
+    flushQueue();
+  }catch(e){ queue(rec); toast("送信失敗。後で再送します","warn"); }
+  updateSyncBadge();
+}
+function queue(rec){ pending.push(rec); localStorage.setItem(pendingKey,JSON.stringify(pending)); updateSyncBadge(); }
+async function flushQueue(){
+  if(!cfg.gas||!pending.length) return;
+  const items=[...pending];
+  for(const rec of items){
+    try{
+      await fetch(cfg.gas,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(rec)});
+      pending=pending.filter(x=>x!==rec); localStorage.setItem(pendingKey,JSON.stringify(pending));
+    }catch(e){ break; }
+  }
+  updateSyncBadge();
+}
+function updateSyncBadge(){
+  const b=$("#syncBadge");
+  if(!cfg.gas){ b.textContent="未接続"; b.className="badge"; }
+  else if(pending.length){ b.textContent=`未送信 ${pending.length}`; b.className="badge"; }
+  else { b.textContent="同期OK"; b.className="badge on"; }
+}
+
+/* ===== reload from server ===== */
+async function reload(){
+  if(!cfg.gas){ renderList(); return; }
+  try{
+    const r=await fetch(cfg.gas);
+    const j=await r.json();
+    if(j.ok){
+      records = j.items.map(x=>({type:x.type,deviceId:x.deviceId,serial:x.serial,method:x.method,worker:x.worker,ts:x.ts}));
+      // ローカル未送信も反映
+      pending.forEach(p=>upsertLocalArr(records,p));
+      renderList(); updateSyncBadge();
+    }
+  }catch(e){ toast("読み込み失敗","err"); }
+}
+$("#btnReload").addEventListener("click", ()=>{ flushQueue().then(reload); });
+
+/* ローカル一覧の upsert */
+function upsertLocal(rec){ upsertLocalArr(records, rec); renderList(); }
+function upsertLocalArr(arr, rec){
+  if(cfg.overwrite){
+    const i=arr.findIndex(r=>norm(r.deviceId)===norm(rec.deviceId));
+    if(i>=0){ arr[i]=rec; return; }
+  }
+  arr.unshift(rec);
+}
+
+/* ===== list render ===== */
+$("#inFilter").addEventListener("input", renderList);
+function renderList(){
+  const f = norm($("#inFilter") ? $("#inFilter").value : "");
+  const body=$("#listBody"); body.innerHTML="";
+  const rows = records.filter(r=>!f || norm(r.deviceId).includes(f) || norm(r.serial).includes(f));
+  rows.slice(0,400).forEach(r=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${esc(r.type)}</td><td>${esc(r.deviceId)}</td><td>${esc(r.serial)}</td><td><span class="pill">${esc(r.method||"")}</span></td>`;
+    body.appendChild(tr);
+  });
+  $("#listEmpty").style.display = rows.length?"none":"block";
+  const done = new Set(records.map(r=>norm(r.deviceId))).size;
+  $("#stDone").textContent=done;
+  const pct = TOTAL? Math.round(done/TOTAL*100):0;
+  $("#stPct").textContent=pct+"%"; $("#prog").style.width=pct+"%";
+}
+
+/* ===== CSV ===== */
+$("#btnCsv").addEventListener("click", ()=>{
+  const head=["種別","機器番号","シリアルNo","入力方法","担当","時刻"];
+  const lines=[head.join(",")];
+  records.forEach(r=>lines.push([r.type,r.deviceId,r.serial,r.method,r.worker,r.ts].map(csv).join(",")));
+  const blob=new Blob(["\uFEFF"+lines.join("\n")],{type:"text/csv"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download="棚卸し_"+new Date().toISOString().slice(0,10)+".csv"; a.click();
+});
+function csv(s){ s=String(s==null?"":s); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; }
+
+/* ===== config ===== */
+$("#inGas").addEventListener("change",saveCfg);
+$("#inWorker").addEventListener("change",saveCfg);
+$("#selOverwrite").addEventListener("change",saveCfg);
+function saveCfg(){
+  cfg.gas=$("#inGas").value.trim();
+  cfg.worker=$("#inWorker").value.trim();
+  cfg.overwrite=$("#selOverwrite").value==="true";
+  localStorage.setItem("stocktake_cfg",JSON.stringify(cfg));
+  updateSyncBadge();
+}
+function loadCfg(){ try{return JSON.parse(localStorage.getItem("stocktake_cfg"))||{overwrite:true};}catch(e){return {overwrite:true};} }
+$("#btnTest").addEventListener("click", async ()=>{
+  saveCfg(); const m=$("#cfgMsg");
+  if(!cfg.gas){ m.textContent="URLを入力してください"; m.className="matched bad"; return; }
+  m.textContent="接続中…"; m.className="matched";
+  try{ const r=await fetch(cfg.gas); const j=await r.json();
+    if(j.ok){ m.textContent=`✓ 接続成功（既存 ${j.items.length} 件）`; m.className="matched ok"; records=j.items; renderList(); }
+    else { m.textContent="応答エラー: "+(j.error||""); m.className="matched bad"; }
+  }catch(e){ m.textContent="接続失敗。URLとデプロイ設定を確認してください"; m.className="matched bad"; }
+});
+
+/* ===== camera: QR scanners (jsQR) ===== */
+let lastSerialMethod=null;
+function startQrScan(videoEl, overlayEl, onHit){
+  let stream, raf, running=true;
+  navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}},audio:false})
+    .then(s=>{ stream=s; videoEl.srcObject=s; videoEl.play(); loop(); })
+    .catch(()=>{ toast("カメラを起動できません","err"); close(); });
+  const cv=document.createElement("canvas"), ctx=cv.getContext("2d",{willReadFrequently:true});
+  function loop(){
+    if(!running) return;
+    if(videoEl.readyState===videoEl.HAVE_ENOUGH_DATA){
+      cv.width=videoEl.videoWidth; cv.height=videoEl.videoHeight;
+      ctx.drawImage(videoEl,0,0,cv.width,cv.height);
+      const img=ctx.getImageData(0,0,cv.width,cv.height);
+      const code=jsQR(img.data,img.width,img.height,{inversionAttempts:"dontInvert"});
+      if(code&&code.data){ navigator.vibrate&&navigator.vibrate(60); onHit(code.data.trim()); close(); return; }
+    }
+    raf=requestAnimationFrame(loop);
+  }
+  function close(){ running=false; cancelAnimationFrame(raf); if(stream)stream.getTracks().forEach(t=>t.stop()); overlayEl.classList.remove("show"); }
+  overlayEl.classList.add("show");
+  return close;
+}
+let closeQr=null, closeSer=null;
+$("#btnQrCam").addEventListener("click", ()=>{ closeQr=startQrScan($("#qrVideo"),$("#ovQr"),v=>{ $("#inDevice").value=v; onDeviceInput(); $("#inSerial").focus(); }); });
+$("#qrClose").addEventListener("click", ()=>closeQr&&closeQr());
+$("#btnSerialCam").addEventListener("click", ()=>{ closeSer=startQrScan($("#serVideo"),$("#ovSer"),v=>{ $("#inSerial").value=v; lastSerialMethod="バーコード"; $("#inSerial").dispatchEvent(new Event("input")); }); });
+$("#serClose").addEventListener("click", ()=>closeSer&&closeSer());
+
+/* ===== OCR (Tesseract.js, 端末内) ===== */
+let ocrStream=null, ocrWorker=null;
+$("#btnOcr").addEventListener("click", async ()=>{
+  $("#ovOcr").classList.add("show");
+  $("#ocrCands").innerHTML=""; $("#ocrRetry").style.display="none"; $("#ocrShoot").style.display="";
+  $("#ocrVideo").style.display=""; $("#ocrPrev").style.display="none";
+  $("#ocrHint").textContent="ラベルの英数字を枠に合わせて撮影";
+  try{
+    ocrStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}}});
+    $("#ocrVideo").srcObject=ocrStream; $("#ocrVideo").play();
+  }catch(e){ toast("カメラを起動できません","err"); closeOcr(); }
+});
+function closeOcr(){ if(ocrStream){ocrStream.getTracks().forEach(t=>t.stop());ocrStream=null;} $("#ovOcr").classList.remove("show"); }
+$("#ocrClose").addEventListener("click", closeOcr);
+$("#ocrRetry").addEventListener("click", ()=>{ $("#btnOcr").click(); });
+
+$("#ocrShoot").addEventListener("click", async ()=>{
+  const v=$("#ocrVideo"); if(!v.videoWidth){return;}
+  const cv=$("#ocrPrev"), ctx=cv.getContext("2d");
+  // 中央の横長帯（reticle相当）だけ切り出して精度UP
+  const W=v.videoWidth,H=v.videoHeight;
+  const cw=Math.round(W*0.82), ch=Math.round(cw/3.2);
+  const sx=Math.round((W-cw)/2), sy=Math.round(H*0.46-ch/2);
+  cv.width=cw; cv.height=ch;
+  ctx.drawImage(v,sx,sy,cw,ch,0,0,cw,ch);
+  // 簡易前処理: グレースケール＋コントラスト
+  const im=ctx.getImageData(0,0,cw,ch),d=im.data;
+  for(let i=0;i<d.length;i+=4){ let g=0.3*d[i]+0.59*d[i+1]+0.11*d[i+2]; g=g<110?0:(g>150?255:g); d[i]=d[i+1]=d[i+2]=g; }
+  ctx.putImageData(im,0,0);
+  $("#ocrVideo").style.display="none"; cv.style.display="";
+  $("#ocrHint").textContent="読取中…";
+  $("#ocrShoot").style.display="none";
+  try{
+    if(!ocrWorker){ ocrWorker=await Tesseract.createWorker("eng"); 
+      await ocrWorker.setParameters({tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-"}); }
+    const {data}=await ocrWorker.recognize(cv);
+    const cands=extractSerials(data.text);
+    showOcrCands(cands, data.text);
+  }catch(e){ $("#ocrHint").textContent="読取に失敗しました"; }
+  $("#ocrRetry").style.display="";
+});
+function extractSerials(text){
+  const toks=(text||"").toUpperCase().replace(/[^A-Z0-9\-\s]/g," ").split(/\s+/).filter(Boolean);
+  const cand=toks.filter(t=>t.replace(/-/g,"").length>=5 && /[0-9]/.test(t));
+  return [...new Set(cand)].sort((a,b)=>b.length-a.length).slice(0,4);
+}
+function showOcrCands(cands, raw){
+  const box=$("#ocrCands"); box.innerHTML="";
+  if(!cands.length){ $("#ocrHint").textContent="候補なし。撮り直すか手入力してください"; return; }
+  $("#ocrHint").textContent="正しい候補をタップ";
+  cands.forEach(c=>{
+    const b=document.createElement("button"); b.className="ocr-cand"; b.textContent=c;
+    b.addEventListener("click",()=>{ $("#inSerial").value=c; lastSerialMethod="OCR"; $("#inSerial").dispatchEvent(new Event("input")); closeOcr(); });
+    box.appendChild(b);
+  });
+}
+
+/* ===== utils ===== */
+function toast(msg,kind){ const t=$("#toast"); t.textContent=msg; t.className="show"+(kind?(" "+kind):""); setTimeout(()=>t.className=t.className.replace("show",""),1800); }
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+window.addEventListener("online", flushQueue);
+$("#inDevice").focus();
+</script>
+</body>
+</html>
