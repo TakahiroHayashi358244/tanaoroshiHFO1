@@ -363,8 +363,8 @@ $("#inSerial").addEventListener("input", ()=>{
   checkDup(); refreshSave();
 });
 /* HIDスキャナのEnter→保存可なら次フィールド/保存 */
-$("#inSerial").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); if(!$("#btnSave").disabled) $("#btnSave").click(); }});
-$("#inDevice").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("#inSerial").focus(); }});
+$("#inSerial").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); if($("#inSerial").value.trim()){ beep(); lastSerialMethod=lastSerialMethod||"バーコード"; } if(!$("#btnSave").disabled) $("#btnSave").click(); }});
+$("#inDevice").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); if($("#inDevice").value.trim()) beep(); $("#inSerial").focus(); }});
 
 function refreshSave(){
   const ok = $("#inDevice").value.trim() && $("#inSerial").value.trim();
@@ -524,7 +524,7 @@ function startQrScan(videoEl, overlayEl, onHit){
       ctx.drawImage(videoEl,0,0,cv.width,cv.height);
       const img=ctx.getImageData(0,0,cv.width,cv.height);
       const code=jsQR(img.data,img.width,img.height,{inversionAttempts:"dontInvert"});
-      if(code&&code.data){ navigator.vibrate&&navigator.vibrate(60); onHit(code.data.trim()); close(); return; }
+      if(code&&code.data){ beep(); navigator.vibrate&&navigator.vibrate(60); onHit(code.data.trim()); close(); return; }
     }
     raf=requestAnimationFrame(loop);
   }
@@ -574,26 +574,100 @@ $("#ocrShoot").addEventListener("click", async ()=>{
     if(!ocrWorker){ ocrWorker=await Tesseract.createWorker("eng"); 
       await ocrWorker.setParameters({tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-"}); }
     const {data}=await ocrWorker.recognize(cv);
-    const cands=extractSerials(data.text);
-    showOcrCands(cands, data.text);
+    const type=$("#selType").value;
+    const cands=extractSerials(data.text, type);
+    showOcrCands(cands, data.text, type);
   }catch(e){ $("#ocrHint").textContent="読取に失敗しました"; }
   $("#ocrRetry").style.display="";
 });
-function extractSerials(text){
-  const toks=(text||"").toUpperCase().replace(/[^A-Z0-9\-\s]/g," ").split(/\s+/).filter(Boolean);
-  const cand=toks.filter(t=>t.replace(/-/g,"").length>=5 && /[0-9]/.test(t));
-  return [...new Set(cand)].sort((a,b)=>b.length-a.length).slice(0,4);
+/* OCR誤認識の文字補正マップ */
+const TO_DIGIT={O:"0",Q:"0",D:"0",I:"1",L:"1",T:"1",Z:"2",E:"3",A:"4",S:"5",G:"6",B:"8","|":"1"};
+const TO_ALPHA={"0":"O","1":"I","5":"S","8":"B","2":"Z","6":"G"};
+function digitsOnly(s){ return s.split("").map(c=>/[0-9]/.test(c)?c:(TO_DIGIT[c]||c)).join(""); }
+
+/* 種別ごとの書式ルールで候補を補正・整形 */
+function applyFormat(tok, type){
+  let t=tok.toUpperCase();
+  if(type==="モバイル"){
+    // 先頭は HFO1。化けた先頭4文字を寄せる（HF01 / HFOI / HF0I / NFO1 等 → HFO1）
+    let head=t.slice(0,4).replace(/[^A-Z0-9]/g,"");
+    if(/^.F.[01I]$/i.test(head) || head.startsWith("H") || head.startsWith("N")){
+      // 4文字目は1に固定、3文字目はO、2文字目はF、1文字目はH に補正
+      t = "HFO1" + t.slice(4);
+    }
+    return t;
+  }
+  if(type==="WindowsPC"||type==="UbuntuPC"){
+    // 数値始まり。先頭から続く「数字に化けやすい英字」だけ数字へ寄せ、後続は温存
+    let i=0, head="";
+    while(i<t.length){
+      const c=t[i];
+      if(/[0-9]/.test(c)){ head+=c; i++; }
+      else if(TO_DIGIT[c]!==undefined){ head+=TO_DIGIT[c]; i++; }
+      else break;
+    }
+    return head + t.slice(i);
+  }
+  return t;
 }
-function showOcrCands(cands, raw){
+function extractSerials(text, type){
+  const toks=(text||"").toUpperCase().replace(/[^A-Z0-9\-\s]/g," ").split(/\s+/).filter(Boolean);
+  // モバイル: 先頭が HFO1 等に化けたトークンと、直後の数字トークンが分離していたら連結
+  let merged=[];
+  for(let i=0;i<toks.length;i++){
+    let cur=toks[i];
+    if(type==="モバイル" && /^[HN][F][O0][1IL]?$/i.test(cur) && i+1<toks.length && /^[0-9A-Z\-]+$/.test(toks[i+1])){
+      cur = cur + toks[i+1]; i++;
+    }
+    merged.push(cur);
+  }
+  const minLen = (type==="WindowsPC"||type==="UbuntuPC") ? 2 : 4; // PCシリアルは短い場合あり
+  let cand=merged.filter(t=>t.replace(/-/g,"").length>=minLen && /[0-9A-Z]/.test(t));
+  let fixed=cand.map(t=>applyFormat(t,type));
+  function score(s){
+    if(type==="モバイル") return s.startsWith("HFO1")?0:1;
+    if(type==="WindowsPC"||type==="UbuntuPC") return /^[0-9]/.test(s)?0:1;
+    return 0;
+  }
+  const uniq=[...new Set(fixed)];
+  uniq.sort((a,b)=> score(a)-score(b) || b.length-a.length );
+  return uniq.slice(0,4);
+}
+function showOcrCands(cands, raw, type){
   const box=$("#ocrCands"); box.innerHTML="";
   if(!cands.length){ $("#ocrHint").textContent="候補なし。撮り直すか手入力してください"; return; }
-  $("#ocrHint").textContent="正しい候補をタップ";
-  cands.forEach(c=>{
+  const ruleTxt = type==="モバイル" ? "先頭 HFO1 に補正" :
+                  (type==="WindowsPC"||type==="UbuntuPC") ? "数字始まりに補正" : "";
+  $("#ocrHint").textContent = ruleTxt ? `正しい候補をタップ（${ruleTxt}）` : "正しい候補をタップ";
+  cands.forEach((c,i)=>{
     const b=document.createElement("button"); b.className="ocr-cand"; b.textContent=c;
-    b.addEventListener("click",()=>{ $("#inSerial").value=c; lastSerialMethod="OCR"; $("#inSerial").dispatchEvent(new Event("input")); closeOcr(); });
+    if(i===0) b.style.background="rgba(46,196,182,.35)"; // 最有力を強調
+    b.addEventListener("click",()=>{ beep(); $("#inSerial").value=c; lastSerialMethod="OCR"; $("#inSerial").dispatchEvent(new Event("input")); closeOcr(); });
     box.appendChild(b);
   });
 }
+
+/* ===== beep（読取成功の高音通知） ===== */
+let _audioCtx=null;
+function ensureAudio(){
+  if(!_audioCtx){ try{ _audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
+  if(_audioCtx && _audioCtx.state==="suspended"){ _audioCtx.resume(); }
+}
+function beep(){
+  try{
+    ensureAudio(); if(!_audioCtx) return;
+    const t=_audioCtx.currentTime;
+    const o=_audioCtx.createOscillator(), g=_audioCtx.createGain();
+    o.type="square"; o.frequency.setValueAtTime(2200,t); // 高音
+    g.gain.setValueAtTime(0.0001,t);
+    g.gain.exponentialRampToValueAtTime(0.25,t+0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+0.13);
+    o.connect(g); g.connect(_audioCtx.destination);
+    o.start(t); o.stop(t+0.14);
+  }catch(e){}
+}
+/* iOSは無音解除のため最初のユーザー操作でオーディオを起こす */
+["touchend","click"].forEach(ev=>document.addEventListener(ev,ensureAudio,{once:true,passive:true}));
 
 /* ===== utils ===== */
 function toast(msg,kind){ const t=$("#toast"); t.textContent=msg; t.className="show"+(kind?(" "+kind):""); setTimeout(()=>t.className=t.className.replace("show",""),1800); }
